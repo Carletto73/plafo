@@ -1,2 +1,2 @@
-# plafo
-Controller for aquarium lighting Arduino based 
+# Plafo
+Controller for aquarium lighting Arduino based
