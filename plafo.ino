@@ -1,6 +1,7 @@
 /*
-release 38: activate PWM outputs. Managed the RTC not working. Managed the router not working
-release 39: added command to force the switch ON and OFF of the lighting
+  release 38: activate PWM outputs. Managed the RTC not working. Managed the router not working
+  release 39: added command to force the switch ON and OFF of the lighting
+  release 40: changed PWM resolution from 255 to 1000. Improved fading
 */
 
 #include <ESP8266WiFi.h>
@@ -29,12 +30,12 @@ int par[72];
 int hourRTC = 3;
 int phase;
 int lux = 0;
-byte target[4];
+int target[4];
+int pwm_light[4];
+int instant_target[4];
+int previous_target[4];
 byte night_lighting[4];
 byte name_light[4];
-byte previous_target[4];
-byte instant_target[4];
-byte pwm_light[4];
 byte immediate_preset;
 byte connection_timeout;
 byte rtc_not_found = 0;
@@ -59,20 +60,21 @@ void setup()
   pinMode(PIN_LED_2, OUTPUT);
   pinMode(PIN_LED_3, OUTPUT);
   pinMode(PIN_LED_4, OUTPUT);
-  analogWrite(PIN_LED_1, 254);
-  analogWrite(PIN_LED_2, 255);
-  analogWrite(PIN_LED_3, 255);
-  analogWrite(PIN_LED_4, 255);
-  
+  analogWriteRange(1000);
+  analogWrite(PIN_LED_1, 1000);
+  analogWrite(PIN_LED_2, 1000);
+  analogWrite(PIN_LED_3, 1000);
+  analogWrite(PIN_LED_4, 1000);
+
   Serial.begin(115200);
   delay(300);
 
   if (rtc.lostPower())
-  { 
+  {
     rtc.setTime(BUILD_SEC, BUILD_MIN, BUILD_HOUR, BUILD_DAY, BUILD_MONTH, BUILD_YEAR);
   }
 
-//Initialize EEPROM
+  //Initialize EEPROM
   EEPROM.begin(512);
 
   // prepare LED
@@ -106,17 +108,17 @@ void setup()
     Serial.println();
     Serial.println(F("WiFi connected"));
     digitalWrite(LED_BUILTIN, 1);
-  
+
     if (MDNS.begin("plafo")) {
       Serial.println("MDNS responder started.      HTTP://plafo.local/");
     }
-  
+
     server.onNotFound(handleWebPage);
-  
+
     // Start the server
     server.begin();
     Serial.println(F("Server started"));
-  
+
     // Print the IP address
     Serial.println(WiFi.localIP());
   }
@@ -253,31 +255,49 @@ void handleWebPage()
   }
 
   addr = 0;
-  if (req.indexOf(F("h")) != -1)       {addr = 0 + ((html_page - 1) * 18);}
-  else if (req.indexOf(F("d")) != -1)  {addr = 1 + ((html_page - 1) * 18);}
-  else if (req.indexOf(F("v")) != -1)  {addr = 2 + ((html_page - 1) * 18);}
-  if (req.indexOf(F("11")) != -1)      {addr += 0;}
-  else if (req.indexOf(F("12")) != -1) {addr += 3;}
-  else if (req.indexOf(F("13")) != -1) {addr += 6;}
-  else if (req.indexOf(F("14")) != -1) {addr += 9;}
-  else if (req.indexOf(F("15")) != -1) {addr += 12;}
-  else if (req.indexOf(F("16")) != -1) {addr += 15;}
+  if (req.indexOf(F("h")) != -1)       {
+    addr = 0 + ((html_page - 1) * 18);
+  }
+  else if (req.indexOf(F("d")) != -1)  {
+    addr = 1 + ((html_page - 1) * 18);
+  }
+  else if (req.indexOf(F("v")) != -1)  {
+    addr = 2 + ((html_page - 1) * 18);
+  }
+  if (req.indexOf(F("11")) != -1)      {
+    addr += 0;
+  }
+  else if (req.indexOf(F("12")) != -1) {
+    addr += 3;
+  }
+  else if (req.indexOf(F("13")) != -1) {
+    addr += 6;
+  }
+  else if (req.indexOf(F("14")) != -1) {
+    addr += 9;
+  }
+  else if (req.indexOf(F("15")) != -1) {
+    addr += 12;
+  }
+  else if (req.indexOf(F("16")) != -1) {
+    addr += 15;
+  }
 
   if (req.indexOf(F("p01")) != -1)      // request to add 1
   {
     if (req.indexOf(F("h")) != -1)      // request to add one to the hour
     {
-      if (par[addr] < 1439)             // the hour will not exceed midnight 
+      if (par[addr] < 1439)             // the hour will not exceed midnight
       {
         if (((addr + 3) % 18) == 0)     // last period
         {
-          if ((par[addr] + par[addr+1] + 1) <= 1440) // the end of the phase does not exceed midnight
+          if ((par[addr] + par[addr + 1] + 1) <= 1440) // the end of the phase does not exceed midnight
           {
             par[addr] += 1;
           }
           else                                       // the end of the phase exceeds midnight
           {
-            if ((par[addr] + par[addr+1] + 1 - 1440) <= par[addr-15]) // the end of the phase will not exceed the start of the next
+            if ((par[addr] + par[addr + 1] + 1 - 1440) <= par[addr - 15]) // the end of the phase will not exceed the start of the next
             {
               par[addr] += 1;
             }
@@ -289,7 +309,7 @@ void handleWebPage()
         }
         else                            // not the last period
         {
-          if ((par[addr] + par[addr+1]) < par[addr+3]) // the end of the phase will not exceed the start of the next
+          if ((par[addr] + par[addr + 1]) < par[addr + 3]) // the end of the phase will not exceed the start of the next
           {
             par[addr] += 1;
           }
@@ -299,7 +319,7 @@ void handleWebPage()
           }
         }
       }
-      else                              // the hour will exceed midnight 
+      else                              // the hour will exceed midnight
       {
         message = F("The start of this phase cannot exceed midnight!");
       }
@@ -310,13 +330,13 @@ void handleWebPage()
       {
         if (((addr + 2) % 18) == 0)     // last period
         {
-          if ((par[addr-1] + par[addr] + 1) <= 1440) // the end of the phase does not exceed midnight
+          if ((par[addr - 1] + par[addr] + 1) <= 1440) // the end of the phase does not exceed midnight
           {
             par[addr] += 1;
           }
           else                                       // the end of the phase exceeds midnight
           {
-            if ((par[addr-1] + par[addr] + 1 - 1440) <= par[addr-16]) // the end of the phase will not exceed the start of the next
+            if ((par[addr - 1] + par[addr] + 1 - 1440) <= par[addr - 16]) // the end of the phase will not exceed the start of the next
             {
               par[addr] += 1;
             }
@@ -328,7 +348,7 @@ void handleWebPage()
         }
         else                            // not the last period
         {
-          if ((par[addr-1] + par[addr]) < par[addr+2]) // the end of the phase will not exceed the start of the next
+          if ((par[addr - 1] + par[addr]) < par[addr + 2]) // the end of the phase will not exceed the start of the next
           {
             par[addr] += 1;
           }
@@ -372,17 +392,17 @@ void handleWebPage()
   {
     if (req.indexOf(F("h")) != -1)      // request to add ten to the hour
     {
-      if (par[addr] < 1430)             // the hour will not exceed midnight 
+      if (par[addr] < 1430)             // the hour will not exceed midnight
       {
         if (((addr + 3) % 18) == 0)     // last period
         {
-          if ((par[addr] + par[addr+1] + 10) <= 1440) // the end of the phase does not exceed midnight
+          if ((par[addr] + par[addr + 1] + 10) <= 1440) // the end of the phase does not exceed midnight
           {
             par[addr] += 10;
           }
           else                                        // the end of the phase exceeds midnight
           {
-            if ((par[addr] + par[addr+1] + 10 - 1440) <= par[addr-15]) // the end of the phase will not exceed the start of the next
+            if ((par[addr] + par[addr + 1] + 10 - 1440) <= par[addr - 15]) // the end of the phase will not exceed the start of the next
             {
               par[addr] += 10;
             }
@@ -394,7 +414,7 @@ void handleWebPage()
         }
         else                            // not the last period
         {
-          if (((par[addr] + par[addr+1]) + 10) <= par[addr+3]) // the end of the phase will not exceed the start of the next
+          if (((par[addr] + par[addr + 1]) + 10) <= par[addr + 3]) // the end of the phase will not exceed the start of the next
           {
             par[addr] += 10;
           }
@@ -404,7 +424,7 @@ void handleWebPage()
           }
         }
       }
-      else                              // the hour will exceed midnight 
+      else                              // the hour will exceed midnight
       {
         message = F("The start of this phase cannot exceed midnight!");
       }
@@ -415,13 +435,13 @@ void handleWebPage()
       {
         if (((addr + 2) % 18) == 0)     // last period
         {
-          if ((par[addr-1] + par[addr] + 10) <= 1440) // the end of the phase does not exceed midnight
+          if ((par[addr - 1] + par[addr] + 10) <= 1440) // the end of the phase does not exceed midnight
           {
             par[addr] += 10;
           }
           else                                       // the end of the phase exceeds midnight
           {
-            if ((par[addr-1] + par[addr] + 10 - 1440) <= par[addr-16]) // the end of the phase will not exceed the start of the next
+            if ((par[addr - 1] + par[addr] + 10 - 1440) <= par[addr - 16]) // the end of the phase will not exceed the start of the next
             {
               par[addr] += 10;
             }
@@ -433,7 +453,7 @@ void handleWebPage()
         }
         else                            // not the last period
         {
-          if (((par[addr-1] + par[addr]) + 10) <= par[addr+2]) // the end of the phase will not exceed the start of the next
+          if (((par[addr - 1] + par[addr]) + 10) <= par[addr + 2]) // the end of the phase will not exceed the start of the next
           {
             par[addr] += 10;
           }
@@ -473,17 +493,17 @@ void handleWebPage()
   {
     if (req.indexOf(F("h")) != -1)      // request to add sixty to the hour
     {
-      if (par[addr] < 1380)             // the hour will not exceed midnight 
+      if (par[addr] < 1380)             // the hour will not exceed midnight
       {
         if (((addr + 3) % 18) == 0)     // last period
         {
-          if ((par[addr] + par[addr+1] + 60) <= 1440) // the end of the phase does not exceed midnight
+          if ((par[addr] + par[addr + 1] + 60) <= 1440) // the end of the phase does not exceed midnight
           {
             par[addr] += 60;
           }
           else                                        // the end of the phase exceeds midnight
           {
-            if ((par[addr] + par[addr+1] + 60 - 1440) <= par[addr-15]) // the end of the phase will not exceed the start of the next
+            if ((par[addr] + par[addr + 1] + 60 - 1440) <= par[addr - 15]) // the end of the phase will not exceed the start of the next
             {
               par[addr] += 60;
             }
@@ -495,7 +515,7 @@ void handleWebPage()
         }
         else                            // not the last period
         {
-          if (((par[addr] + par[addr+1]) + 60) <= par[addr+3]) // the end of the phase will not exceed the start of the next
+          if (((par[addr] + par[addr + 1]) + 60) <= par[addr + 3]) // the end of the phase will not exceed the start of the next
           {
             par[addr] += 60;
           }
@@ -505,7 +525,7 @@ void handleWebPage()
           }
         }
       }
-      else                              // the hour will exceed midnight 
+      else                              // the hour will exceed midnight
       {
         message = F("The start of this phase cannot exceed midnight!");
       }
@@ -524,17 +544,17 @@ void handleWebPage()
   {
     if (req.indexOf(F("h")) != -1)      // request to subtract 1 to the hour
     {
-      if (par[addr] > 0)                // the hour will not drop below midnight 
+      if (par[addr] > 0)                // the hour will not drop below midnight
       {
         if ((addr % 18) == 0)           // first period
         {
-          if (par[addr+15] + par[addr+16] <= 1440) // the last period ends before midnight
+          if (par[addr + 15] + par[addr + 16] <= 1440) // the last period ends before midnight
           {
             par[addr] -= 1;
           }
           else                                     // the last period ends after midnight
           {
-            if (par[addr] > (par[addr+15] + par[addr+16] - 1440)) // the period begins after the end of the previous one
+            if (par[addr] > (par[addr + 15] + par[addr + 16] - 1440)) // the period begins after the end of the previous one
             {
               par[addr] -= 1;
             }
@@ -546,7 +566,7 @@ void handleWebPage()
         }
         else                            // not first period
         {
-          if (par[addr] > (par[addr-3] + par[addr-2])) // the period begins after the end of the previous one 
+          if (par[addr] > (par[addr - 3] + par[addr - 2])) // the period begins after the end of the previous one
           {
             par[addr] -= 1;
           }
@@ -601,17 +621,17 @@ void handleWebPage()
   {
     if (req.indexOf(F("h")) != -1)      // request to subtract ten to the hour
     {
-      if (par[addr] > 9)                // the hour will not drop below midnight 
+      if (par[addr] > 9)                // the hour will not drop below midnight
       {
         if ((addr % 18) == 0)           // first period
         {
-          if (par[addr+15] + par[addr+16] <= 1440) // the last period ends before midnight
+          if (par[addr + 15] + par[addr + 16] <= 1440) // the last period ends before midnight
           {
             par[addr] -= 10;
           }
           else                                     // the last period ends after midnight
           {
-            if ((par[addr] - 9) > (par[addr+15] + par[addr+16] - 1440)) // the period begins after the end of the previous one
+            if ((par[addr] - 9) > (par[addr + 15] + par[addr + 16] - 1440)) // the period begins after the end of the previous one
             {
               par[addr] -= 10;
             }
@@ -623,7 +643,7 @@ void handleWebPage()
         }
         else                            // not first period
         {
-          if ((par[addr] - 9) > (par[addr-3] + par[addr-2])) // the period begins after the end of the previous one 
+          if ((par[addr] - 9) > (par[addr - 3] + par[addr - 2])) // the period begins after the end of the previous one
           {
             par[addr] -= 10;
           }
@@ -674,17 +694,17 @@ void handleWebPage()
   {
     if (req.indexOf(F("h")) != -1)      // request to subtract sixty to the hour
     {
-      if (par[addr] > 59)                // the hour will not drop below midnight 
+      if (par[addr] > 59)                // the hour will not drop below midnight
       {
         if ((addr % 18) == 0)           // first period
         {
-          if (par[addr+15] + par[addr+16] <= 1440) // the last period ends before midnight
+          if (par[addr + 15] + par[addr + 16] <= 1440) // the last period ends before midnight
           {
             par[addr] -= 60;
           }
           else                                     // the last period ends after midnight
           {
-            if ((par[addr] - 59) > (par[addr+15] + par[addr+16] - 1440)) // the period begins after the end of the previous one
+            if ((par[addr] - 59) > (par[addr + 15] + par[addr + 16] - 1440)) // the period begins after the end of the previous one
             {
               par[addr] -= 60;
             }
@@ -696,7 +716,7 @@ void handleWebPage()
         }
         else                            // not first period
         {
-          if ((par[addr] - 59) > (par[addr-3] + par[addr-2])) // the period begins after the end of the previous one 
+          if ((par[addr] - 59) > (par[addr - 3] + par[addr - 2])) // the period begins after the end of the previous one
           {
             par[addr] -= 60;
           }
@@ -821,10 +841,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>1</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[0 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[0 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[0 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[0 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[0 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[0 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -832,19 +856,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[0 + ((html_page - 1) * 18)] + par[1 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -867,10 +899,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>2</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[3 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[3 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[3 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[3 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[3 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[3 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -878,19 +914,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[3 + ((html_page - 1) * 18)] + par[4 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -913,10 +957,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>3</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[6 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[6 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[6 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[6 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[6 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[6 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -924,19 +972,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[6 + ((html_page - 1) * 18)] + par[7 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -959,10 +1015,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>4</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[9 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[9 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[9 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[9 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[9 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[9 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -970,19 +1030,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[9 + ((html_page - 1) * 18)] + par[10 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -1005,10 +1073,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>5</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[12 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[12 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[12 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[12 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[12 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[12 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -1016,19 +1088,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[12 + ((html_page - 1) * 18)] + par[13 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -1051,10 +1131,14 @@ void handleWebPage()
     stringHTML += F("<tr style=\"height: 22px;\">");
     stringHTML += F("<td style=\"width: 10%; height: 44px; text-align: center; vertical-align: middle;\" rowspan=\"2\"><span style=\"font-size: 36pt;\"><strong>6</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Hour: <strong>");
-    if (((par[15 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+    if (((par[15 + ((html_page - 1) * 18)]) / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[15 + ((html_page - 1) * 18)]) / 60;
     stringHTML += F(":");
-    if (((par[15 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+    if (((par[15 + ((html_page - 1) * 18)]) % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += (par[15 + ((html_page - 1) * 18)]) % 60;
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Duration: <strong>");
@@ -1062,19 +1146,27 @@ void handleWebPage()
     stringHTML += F("</strong> min</br>End of the transition: <strong>");
     if (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] < 1440)
     {
-      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) / 60) < 10) {stringHTML += F("0");}
+      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) / 60;
       stringHTML += F(":");
-      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) % 60) < 10) {stringHTML += F("0");}
+      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) % 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)]) % 60;
     }
     else
     {
-      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {stringHTML += F("0");}
+      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) / 60) < 10) {
+        stringHTML += F("0");
+      }
       stringHTML += (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) / 60;
       stringHTML += F(":");
-      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {stringHTML += F("0");}
-      stringHTML += (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] -1440) % 60;
+      if (((par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) % 60) < 10) {
+        stringHTML += F("0");
+      }
+      stringHTML += (par[15 + ((html_page - 1) * 18)] + par[16 + ((html_page - 1) * 18)] - 1440) % 60;
     }
     stringHTML += F("</strong></span></td>");
     stringHTML += F("<td style=\"width: 30%; height: 22px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Value: <strong>");
@@ -1094,11 +1186,11 @@ void handleWebPage()
     stringHTML += F("<td style=\"width: 30%; text-align: center; vertical-align: middle; height: 22px;\"><span style=\"font-size: 18pt;\">Use as night lighting: <strong>");
     if (night_lighting[(html_page - 1)] == 1)
     {
-      stringHTML += F("YES"); 
+      stringHTML += F("YES");
     }
     else
     {
-      stringHTML += F("NO"); 
+      stringHTML += F("NO");
     }
     stringHTML += F("</strong></span> <a title=\"KEEP ON\" style=\"text-decoration: none\"  href=\"http:/np01\"><span style=\"font-size: 18pt;\"><font color=\"green\"><strong>(KEEP ON)</strong></font></span></a> <a title=\"KEEP OFF\" style=\"text-decoration: none\"  href=\"http:/nm01\"><span style=\"font-size: 18pt;\"><font color=\"red\"><strong>(KEEP OFF)</strong></font></span></a>");
     stringHTML += F("</td>");
@@ -1120,10 +1212,14 @@ void handleWebPage()
     stringHTML += F("</tr>");
     stringHTML += F("<tr>");
     stringHTML += F("<td style=\"width: 15%; height: 10px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 24pt;\">");
-    if ((hourRTC / 60) < 10) {stringHTML += F("0");}
+    if ((hourRTC / 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += hourRTC / 60;
     stringHTML += F(":");
-    if ((hourRTC % 60) < 10) {stringHTML += F("0");}
+    if ((hourRTC % 60) < 10) {
+      stringHTML += F("0");
+    }
     stringHTML += hourRTC % 60;
     stringHTML += F("</span></td>");
     stringHTML += F("<td style=\"width: 85%; height: 10px; text-align: left; vertical-align: middle;\">");
@@ -1158,7 +1254,7 @@ void handleWebPage()
 
         stringHTML += text_light[i];
         stringHTML += F("</option>");
-      } 
+      }
       stringHTML += F("</select> ");
     }
     stringHTML += F("<input type=\"submit\" value=\" DONE ! \">");
@@ -1171,12 +1267,12 @@ void handleWebPage()
     stringHTML += F("Power outputs ");
     for (byte i = 0; i < 4; i++)
     {
-     stringHTML += F("(");
-     stringHTML += text_light[name_light[i]];
-     stringHTML += F("=");
-     stringHTML += String((pwm_light[i] + 2) * 100 / 255);
-     stringHTML += F("%) ");
-    } 
+      stringHTML += F("(");
+      stringHTML += text_light[name_light[i]];
+      stringHTML += F("=");
+      stringHTML += String((pwm_light[i] + 9) / 10);
+      stringHTML += F("%) ");
+    }
     stringHTML += F("</span></td>");
     stringHTML += F("</tr>");
     stringHTML += F("<tr>");
@@ -1190,20 +1286,20 @@ void handleWebPage()
     stringHTML += F("<tr>");
     stringHTML += F("<td style=\"width: 15%; height: 10px; text-align: center; vertical-align: middle;\"><span style=\"font-size: 24pt;\">MODE</span></td>");
 
-   
-    
+
+
     stringHTML += F("<td style=\"width: 85%; height: 10px; text-align: left; vertical-align: middle;\"><span style=\"font-size: 18pt;\">Model selected: <strong>");
     if (mode_selected == 0)
     {
-      stringHTML += F("NORMAL"); 
+      stringHTML += F("NORMAL");
     }
     else if (mode_selected == 1)
     {
-      stringHTML += F("FORCED ON"); 
+      stringHTML += F("FORCED ON");
     }
     else if (mode_selected == 2)
     {
-      stringHTML += F("FORCED OFF"); 
+      stringHTML += F("FORCED OFF");
     }
     stringHTML += F("<strong></span> <a title=\"FORCE ON\" style=\"text-decoration: none\"  href=\"http:/jon\"><span style=\"font-size: 18pt;\"><font color=\"green\"><strong>(FORCE ON)</strong></font></span></a> <a title=\"NORMAL\" style=\"text-decoration: none\"  href=\"http:/jnorm\"><span style=\"font-size: 18pt;\"><font color=\"blue\"><strong>(NORMAL)</strong></font></span></a> <a title=\"FORCE OFF\" style=\"text-decoration: none\"  href=\"http:/joff\"><span style=\"font-size: 18pt;\"><font color=\"red\"><strong>(FORCE OFF)</strong></font></span></a></td></tr>");
     stringHTML += F("</tbody>");
@@ -1233,20 +1329,20 @@ void lighting_program_check()
     {
       if ((phase % 2) == 1) // check if the hour is after the end of a period If yes exit
       {
-        if (hourRTC >= (par[(phase / 2 * 3) + (18 * lux)] + par[((phase / 2 * 3) + 1) + (18 * lux)]))         
+        if (hourRTC >= (par[(phase / 2 * 3) + (18 * lux)] + par[((phase / 2 * 3) + 1) + (18 * lux)]))
         {
           break;
         }
       }
       else                  // check if the hour is in middle of a period. If yes exit
       {
-        if (hourRTC >= (par[(phase / 2 * 3) + (18 * lux)]))         
+        if (hourRTC >= (par[(phase / 2 * 3) + (18 * lux)]))
         {
           if ((phase == 10) && ((par[15 + (18 * lux)] + par[16 + (18 * lux)]) >= 1440)) // check if the hour is in middle of the last period and it ends after midnight
           {
             phase = 15;
             break;
-            
+
           }
           break;
         }
@@ -1258,7 +1354,7 @@ void lighting_program_check()
       {
         phase = 12;
       }
-      else                          // the last period ends after midnight and it is not finished 
+      else                          // the last period ends after midnight and it is not finished
       {
         if (hourRTC < (par[15 + (18 * lux)] + par[16 + (18 * lux)] - 1440)) // check il the last period, that it start the day before, is not finish
         {
@@ -1273,19 +1369,20 @@ void lighting_program_check()
     target[lux] = 0;
     previous_target[lux] = 0;
     instant_target[lux] = 0;
-    speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+    speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
     difference_between_targets = 0;
     percentage_in_the_period = 0;
     if (phase == 12) // the last period ends before midnight and is not starter the first period
     {
-      target[lux] = par[17 + (18 * lux)] * 2.55F;
+      //      target[lux] = par[17 + (18 * lux)] * 2.55F;
+      target[lux] = par[17 + (18 * lux)] * 10;
       instant_target[lux] = target[lux];
-      speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+      speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
     }
     else if (phase == 13) // the last period started the day before, is not finish
     {
-      target[lux] = par[17 + (18 * lux)] * 2.55F;
-      previous_target[lux] = par[14 + (18 * lux)] * 2.55F;
+      target[lux] = par[17 + (18 * lux)] * 10;
+      previous_target[lux] = par[14 + (18 * lux)] * 10;
       difference_between_targets = target[lux] - previous_target[lux];
       percentage_in_the_period = par[16 + (18 * lux)]; // duration
       percentage_in_the_period = (hourRTC + (1440 - par[15 + (18 * lux)])) / percentage_in_the_period; // minutes passed / duration
@@ -1304,19 +1401,19 @@ void lighting_program_check()
       }
       else
       {
-        speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+        speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
       }
     }
     else if (phase == 14) // the last period started the day before, is finish (but is not starter the first period)
     {
-      target[lux] = par[17 + (18 * lux)] * 2.55F;
+      target[lux] = par[17 + (18 * lux)] * 10;
       instant_target[lux] = target[lux];
-      speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+      speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
     }
     else if (phase == 15) // the last period in not finish and it ends after midnight
     {
-      target[lux] = par[17 + (18 * lux)] * 2.55F;
-      previous_target[lux] = par[14 + (18 * lux)] * 2.55F;
+      target[lux] = par[17 + (18 * lux)] * 10;
+      previous_target[lux] = par[14 + (18 * lux)] * 10;
       difference_between_targets = target[lux] - previous_target[lux];
       percentage_in_the_period = par[16 + (18 * lux)]; // duration
       percentage_in_the_period = (hourRTC - par[15 + (18 * lux)]) / percentage_in_the_period; // minutes passed / duration
@@ -1335,25 +1432,25 @@ void lighting_program_check()
       }
       else
       {
-        speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+        speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
       }
     }
     else if ((phase % 2) == 1) // a period is finish
     {
-      target[lux] = par[((phase / 2 * 3) + 2) + (18 * lux)] * 2.55F;
+      target[lux] = par[((phase / 2 * 3) + 2) + (18 * lux)] * 10;
       instant_target[lux] = target[lux];
-      speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+      speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
     }
     else // a period is not finish
     {
-      target[lux] = par[((phase / 2 * 3) + 2) + (18 * lux)] * 2.55F;
+      target[lux] = par[((phase / 2 * 3) + 2) + (18 * lux)] * 10;
       if ((phase / 2) == 0) // first phase
       {
-        previous_target[lux] = par[17 + (18 * lux)] * 2.55F;;
+        previous_target[lux] = par[17 + (18 * lux)] * 10;;
       }
       else                  // not first phase
       {
-        previous_target[lux] = par[((((phase / 2) - 1) * 3) + 2) + (18 * lux)] * 2.55F;
+        previous_target[lux] = par[((((phase / 2) - 1) * 3) + 2) + (18 * lux)] * 10;
       }
       difference_between_targets = target[lux] - previous_target[lux];
       percentage_in_the_period = par[((phase / 2) * 3) + 1 + (18 * lux)]; // duration
@@ -1373,7 +1470,7 @@ void lighting_program_check()
       }
       else
       {
-        speed_to_target[lux] = 40; // 10,2 seconds from 255 to 0
+        speed_to_target[lux] = 10; // 10 seconds from 1000 to 0
       }
     }
   }
@@ -1411,7 +1508,7 @@ void pwm_managing()
       {
         digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
       }
-    }    
+    }
 
     for (byte i = 0; i < 4; i++)
     {
@@ -1420,16 +1517,12 @@ void pwm_managing()
         prev_millis_light[i] = currentMillis;
         if (pwm_light[i] < target[i])
         {
-          pwm_light[i] += 1; 
+          pwm_light[i] += 1;
         }
         if (pwm_light[i] > target[i])
         {
-          pwm_light[i] -= 1; 
+          pwm_light[i] -= 1;
         }
-      }
-      if ((night_lighting[i] == 1) && (pwm_light[i] < 2))
-      {
-        pwm_light[i] = 2;
       }
     }
   }
@@ -1442,17 +1535,81 @@ void pwm_managing()
   }
   else if (mode_selected == 2)
   {
-    analogWrite(PIN_LED_1, 255);
-    analogWrite(PIN_LED_2, 255);
-    analogWrite(PIN_LED_3, 255);
-    analogWrite(PIN_LED_4, 255);
+    analogWrite(PIN_LED_1, 1000);
+    analogWrite(PIN_LED_2, 1000);
+    analogWrite(PIN_LED_3, 1000);
+    analogWrite(PIN_LED_4, 1000);
   }
   else
   {
-    analogWrite(PIN_LED_1, 255 - pwm_light[0]);
-    analogWrite(PIN_LED_2, 255 - pwm_light[1]);
-    analogWrite(PIN_LED_3, 255 - pwm_light[2]);
-    analogWrite(PIN_LED_4, 255 - pwm_light[3]);
+    if (pwm_light[0] < 5)
+    {
+      if (night_lighting[0] == 1)
+      {
+        analogWrite(PIN_LED_1, 995);
+      }
+      else
+      {
+        analogWrite(PIN_LED_1, 1000);
+      }
+    }
+    else
+    {
+      analogWrite(PIN_LED_1, 1000 - pwm_light[0]);
+    }
+      
+    if (pwm_light[1] < 5)
+    {
+      if (night_lighting[1] == 1)
+      {
+        analogWrite(PIN_LED_2, 995);
+      }
+      else
+      {
+        analogWrite(PIN_LED_2, 1000);
+      }
+    }
+    else
+    {
+      analogWrite(PIN_LED_2, 1000 - pwm_light[1]);
+    }
+    
+    if (pwm_light[2] < 5)
+    {
+      if (night_lighting[2] == 1)
+      {
+        analogWrite(PIN_LED_3, 995);
+      }
+      else
+      {
+        analogWrite(PIN_LED_3, 1000);
+      }
+    }
+    else
+    {
+      analogWrite(PIN_LED_3, 1000 - pwm_light[2]);
+    }
+    
+    if (pwm_light[3] < 5)
+    {
+      if (night_lighting[3] == 1)
+      {
+        analogWrite(PIN_LED_4, 995);
+      }
+      else
+      {
+        analogWrite(PIN_LED_4, 1000);
+      }
+    }
+    else
+    {
+      analogWrite(PIN_LED_4, 1000 - pwm_light[3]);
+    }
+    
+/*    analogWrite(PIN_LED_1, 1000 - pwm_light[0]);
+    analogWrite(PIN_LED_2, 1000 - pwm_light[1]);
+    analogWrite(PIN_LED_3, 1000 - pwm_light[2]);
+    analogWrite(PIN_LED_4, 1000 - pwm_light[3]);*/
   }
 }
 
@@ -1543,100 +1700,100 @@ void preset()
 
 void save()
 {
-  EEPROM.write(0, par[0]/60);   // start hour h phase 1 light 1
-  EEPROM.write(1, par[0]%60);   // start hour m phase 1 light 1
+  EEPROM.write(0, par[0] / 60); // start hour h phase 1 light 1
+  EEPROM.write(1, par[0] % 60); // start hour m phase 1 light 1
   EEPROM.write(2, par[1]);      // duration     phase 1 light 1
   EEPROM.write(3, par[2]);      // target value phase 1 light 1
-  EEPROM.write(4, par[3]/60);   // start hour h phase 2 light 1
-  EEPROM.write(5, par[3]%60);   // start hour m phase 2 light 1
+  EEPROM.write(4, par[3] / 60); // start hour h phase 2 light 1
+  EEPROM.write(5, par[3] % 60); // start hour m phase 2 light 1
   EEPROM.write(6, par[4]);      // duration     phase 2 light 1
   EEPROM.write(7, par[5]);      // target value phase 2 light 1
-  EEPROM.write(8, par[6]/60);   // start hour h phase 3 light 1
-  EEPROM.write(9, par[6]%60);   // start hour m phase 3 light 1
+  EEPROM.write(8, par[6] / 60); // start hour h phase 3 light 1
+  EEPROM.write(9, par[6] % 60); // start hour m phase 3 light 1
   EEPROM.write(10, par[7]);     // duration     phase 3 light 1
   EEPROM.write(11, par[8]);     // target value phase 3 light 1
-  EEPROM.write(12, par[9]/60);  // start hour h phase 4 light 1
-  EEPROM.write(13, par[9]%60);  // start hour m phase 4 light 1
+  EEPROM.write(12, par[9] / 60); // start hour h phase 4 light 1
+  EEPROM.write(13, par[9] % 60); // start hour m phase 4 light 1
   EEPROM.write(14, par[10]);    // duration     phase 4 light 1
   EEPROM.write(15, par[11]);    // target value phase 4 light 1
-  EEPROM.write(16, par[12]/60); // start hour h phase 5 light 1
-  EEPROM.write(17, par[12]%60); // start hour m phase 5 light 1
+  EEPROM.write(16, par[12] / 60); // start hour h phase 5 light 1
+  EEPROM.write(17, par[12] % 60); // start hour m phase 5 light 1
   EEPROM.write(18, par[13]);    // duration     phase 5 light 1
   EEPROM.write(19, par[14]);    // target value phase 5 light 1
-  EEPROM.write(20, par[15]/60); // start hour h phase 6 light 1
-  EEPROM.write(21, par[15]%60); // start hour m phase 6 light 1
+  EEPROM.write(20, par[15] / 60); // start hour h phase 6 light 1
+  EEPROM.write(21, par[15] % 60); // start hour m phase 6 light 1
   EEPROM.write(22, par[16]);    // duration     phase 6 light 1
   EEPROM.write(23, par[17]);    // target value phase 6 light 1
-  EEPROM.write(24, par[18]/60); // start hour h phase 1 light 2
-  EEPROM.write(25, par[18]%60); // start hour m phase 1 light 2
+  EEPROM.write(24, par[18] / 60); // start hour h phase 1 light 2
+  EEPROM.write(25, par[18] % 60); // start hour m phase 1 light 2
   EEPROM.write(26, par[19]);    // duration     phase 1 light 2
   EEPROM.write(27, par[20]);    // target value phase 1 light 2
-  EEPROM.write(28, par[21]/60); // start hour h phase 2 light 2
-  EEPROM.write(29, par[21]%60); // start hour m phase 2 light 2
+  EEPROM.write(28, par[21] / 60); // start hour h phase 2 light 2
+  EEPROM.write(29, par[21] % 60); // start hour m phase 2 light 2
   EEPROM.write(30, par[22]);    // duration     phase 2 light 2
   EEPROM.write(31, par[23]);    // target value phase 2 light 2
-  EEPROM.write(32, par[24]/60); // start hour h phase 3 light 2
-  EEPROM.write(33, par[24]%60); // start hour m phase 3 light 2
+  EEPROM.write(32, par[24] / 60); // start hour h phase 3 light 2
+  EEPROM.write(33, par[24] % 60); // start hour m phase 3 light 2
   EEPROM.write(34, par[25]);    // duration     phase 3 light 2
   EEPROM.write(35, par[26]);    // target value phase 3 light 2
-  EEPROM.write(36, par[27]/60); // start hour h phase 4 light 2
-  EEPROM.write(37, par[27]%60); // start hour m phase 4 light 2
+  EEPROM.write(36, par[27] / 60); // start hour h phase 4 light 2
+  EEPROM.write(37, par[27] % 60); // start hour m phase 4 light 2
   EEPROM.write(38, par[28]);    // duration     phase 4 light 2
   EEPROM.write(39, par[29]);    // target value phase 4 light 2
-  EEPROM.write(40, par[30]/60); // start hour h phase 5 light 2
-  EEPROM.write(41, par[30]%60); // start hour m phase 5 light 2
+  EEPROM.write(40, par[30] / 60); // start hour h phase 5 light 2
+  EEPROM.write(41, par[30] % 60); // start hour m phase 5 light 2
   EEPROM.write(42, par[31]);    // duration     phase 5 light 2
   EEPROM.write(43, par[32]);    // target value phase 5 light 2
-  EEPROM.write(44, par[33]/60); // start hour h phase 6 light 2
-  EEPROM.write(45, par[33]%60); // start hour m phase 6 light 2
+  EEPROM.write(44, par[33] / 60); // start hour h phase 6 light 2
+  EEPROM.write(45, par[33] % 60); // start hour m phase 6 light 2
   EEPROM.write(46, par[34]);    // duration     phase 6 light 2
   EEPROM.write(47, par[35]);    // target value phase 6 light 2
-  EEPROM.write(48, par[36]/60); // start hour h phase 1 light 3
-  EEPROM.write(49, par[36]%60); // start hour m phase 1 light 3
+  EEPROM.write(48, par[36] / 60); // start hour h phase 1 light 3
+  EEPROM.write(49, par[36] % 60); // start hour m phase 1 light 3
   EEPROM.write(50, par[37]);    // duration     phase 1 light 3
   EEPROM.write(51, par[38]);    // target value phase 1 light 3
-  EEPROM.write(52, par[39]/60); // start hour h phase 2 light 3
-  EEPROM.write(53, par[39]%60); // start hour m phase 2 light 3
+  EEPROM.write(52, par[39] / 60); // start hour h phase 2 light 3
+  EEPROM.write(53, par[39] % 60); // start hour m phase 2 light 3
   EEPROM.write(54, par[40]);    // duration     phase 2 light 3
   EEPROM.write(55, par[41]);    // target value phase 2 light 3
-  EEPROM.write(56, par[42]/60); // start hour h phase 3 light 3
-  EEPROM.write(57, par[42]%60); // start hour m phase 3 light 3
+  EEPROM.write(56, par[42] / 60); // start hour h phase 3 light 3
+  EEPROM.write(57, par[42] % 60); // start hour m phase 3 light 3
   EEPROM.write(58, par[43]);    // duration     phase 3 light 3
   EEPROM.write(59, par[44]);    // target value phase 3 light 3
-  EEPROM.write(60, par[45]/60); // start hour h phase 4 light 3
-  EEPROM.write(61, par[45]%60); // start hour m phase 4 light 3
+  EEPROM.write(60, par[45] / 60); // start hour h phase 4 light 3
+  EEPROM.write(61, par[45] % 60); // start hour m phase 4 light 3
   EEPROM.write(62, par[46]);    // duration     phase 4 light 3
   EEPROM.write(63, par[47]);    // target value phase 4 light 3
-  EEPROM.write(64, par[48]/60); // start hour h phase 5 light 3
-  EEPROM.write(65, par[48]%60); // start hour m phase 5 light 3
+  EEPROM.write(64, par[48] / 60); // start hour h phase 5 light 3
+  EEPROM.write(65, par[48] % 60); // start hour m phase 5 light 3
   EEPROM.write(66, par[49]);    // duration     phase 5 light 3
   EEPROM.write(67, par[50]);    // target value phase 5 light 3
-  EEPROM.write(68, par[51]/60); // start hour h phase 6 light 3
-  EEPROM.write(69, par[51]%60); // start hour m phase 6 light 3
+  EEPROM.write(68, par[51] / 60); // start hour h phase 6 light 3
+  EEPROM.write(69, par[51] % 60); // start hour m phase 6 light 3
   EEPROM.write(70, par[52]);    // duration     phase 6 light 3
   EEPROM.write(71, par[53]);    // target value phase 6 light 3
-  EEPROM.write(72, par[54]/60); // start hour h phase 1 light 3
-  EEPROM.write(73, par[54]%60); // start hour m phase 1 light 3
+  EEPROM.write(72, par[54] / 60); // start hour h phase 1 light 3
+  EEPROM.write(73, par[54] % 60); // start hour m phase 1 light 3
   EEPROM.write(74, par[55]);    // duration     phase 1 light 3
   EEPROM.write(75, par[56]);    // target value phase 1 light 3
-  EEPROM.write(76, par[57]/60); // start hour h phase 2 light 3
-  EEPROM.write(77, par[57]%60); // start hour m phase 2 light 3
+  EEPROM.write(76, par[57] / 60); // start hour h phase 2 light 3
+  EEPROM.write(77, par[57] % 60); // start hour m phase 2 light 3
   EEPROM.write(78, par[58]);    // duration     phase 2 light 3
   EEPROM.write(79, par[59]);    // target value phase 2 light 3
-  EEPROM.write(80, par[60]/60); // start hour h phase 3 light 3
-  EEPROM.write(81, par[60]%60); // start hour m phase 3 light 3
+  EEPROM.write(80, par[60] / 60); // start hour h phase 3 light 3
+  EEPROM.write(81, par[60] % 60); // start hour m phase 3 light 3
   EEPROM.write(82, par[61]);    // duration     phase 3 light 3
   EEPROM.write(83, par[62]);    // target value phase 3 light 3
-  EEPROM.write(84, par[63]/60); // start hour h phase 4 light 3
-  EEPROM.write(85, par[63]%60); // start hour m phase 4 light 3
+  EEPROM.write(84, par[63] / 60); // start hour h phase 4 light 3
+  EEPROM.write(85, par[63] % 60); // start hour m phase 4 light 3
   EEPROM.write(86, par[64]);    // duration     phase 4 light 3
   EEPROM.write(87, par[65]);    // target value phase 4 light 3
-  EEPROM.write(88, par[66]/60); // start hour h phase 5 light 3
-  EEPROM.write(89, par[66]%60); // start hour m phase 5 light 3
+  EEPROM.write(88, par[66] / 60); // start hour h phase 5 light 3
+  EEPROM.write(89, par[66] % 60); // start hour m phase 5 light 3
   EEPROM.write(90, par[67]);    // duration     phase 5 light 3
   EEPROM.write(91, par[68]);    // target value phase 5 light 3
-  EEPROM.write(92, par[69]/60); // start hour h phase 6 light 3
-  EEPROM.write(93, par[69]%60); // start hour m phase 6 light 3
+  EEPROM.write(92, par[69] / 60); // start hour h phase 6 light 3
+  EEPROM.write(93, par[69] % 60); // start hour m phase 6 light 3
   EEPROM.write(94, par[70]);    // duration     phase 6 light 3
   EEPROM.write(95, par[71]);    // target value phase 6 light 3
   EEPROM.write(96, night_lighting[0]); // Light 1 night_lighting
